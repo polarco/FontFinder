@@ -44,6 +44,13 @@ class MatchError(Exception):
     """Erro amigável do pipeline (mostrado na UI)."""
 
 
+def _calibrate(raw: float) -> float:
+    """Mapeia o score cru (comprimido em ~0.45–0.60) para uma escala
+    perceptual 0–100: match exato ≈ 95, candidato razoável ≈ 70,
+    fonte errada < 20. Monotônica — não altera a ordem do ranking."""
+    return float(100.0 / (1.0 + np.exp(-(raw - 0.50) / 0.025)))
+
+
 def _cache_path(font: FontInfo, word: str) -> str:
     raw = f"{font.key}|{font.mtime}|{word}|{PIPELINE_VERSION}|{RENDER_SIZE}"
     digest = hashlib.sha1(raw.encode()).hexdigest()
@@ -155,7 +162,8 @@ def match_word(
         _, binary = entries[key]
         adjusted = match_stroke_width(binary, target_stroke)
         score = fine_similarity(target_canvas, to_canvas(adjusted))
-        results.append(MatchResult(font=by_key[key], score=round(score * 100, 1),
+        results.append(MatchResult(font=by_key[key],
+                                   score=round(_calibrate(score), 1),
                                    render=binary))
         notify(i, len(survivors), "Comparando candidatas")
 

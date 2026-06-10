@@ -1,11 +1,15 @@
 """OCR da imagem com segmentação palavra a palavra.
 
-Engine principal: RapidOCR (PP-OCR via ONNX, 100% offline, alfabeto latino com
-acentos pt-BR). Fallback: Tesseract (por+eng) se instalado. O OCR aqui é só
-sugestão — o usuário sempre pode corrigir o texto antes do matching.
+Engine principal: RapidOCR com modelo de reconhecimento PP-OCRv5 LATINO —
+dicionário com acentuação completa (ã, ç, é, õ…), essencial para pt-BR.
+As caixas por palavra vêm do próprio modelo (return_word_box).
 
-O RapidOCR detecta LINHAS de texto; a divisão em palavras é feita aqui, por
-projeção vertical (vales de espaço entre palavras) com fallback proporcional.
+Robustez para fontes difíceis: a imagem passa por múltiplas passadas de OCR
+(original, ampliada com equalização de contraste, binarizada) e os resultados
+são fundidos por sobreposição, ficando o de maior confiança.
+
+Fallback: Tesseract (por+eng) se instalado. O OCR é sempre só sugestão — o
+usuário pode corrigir o texto antes do matching.
 """
 from __future__ import annotations
 
@@ -35,84 +39,105 @@ class WordBox:
         return self.x, self.y, self.w, self.h
 
 
-_rapidocr = None
+_engine = None
 
 
-def _get_rapidocr():
-    global _rapidocr
-    if _rapidocr is None:
-        from rapidocr_onnxruntime import RapidOCR
-        _rapidocr = RapidOCR()
-    return _rapidocr
+def _get_engine():
+    global _engine
+    if _engine is None:
+        from rapidocr import RapidOCR
+        from rapidocr.utils.typings import LangRec, ModelType, OCRVersion
+        _engine = RapidOCR(params={
+            "Rec.lang_type": LangRec.LATIN,
+            "Rec.ocr_version": OCRVersion.PPOCRV5,
+            "Rec.model_type": ModelType.MOBILE,
+        })
+    return _engine
 
 
-def _split_line_into_words(img: np.ndarray, x: int, y: int, w: int, h: int,
-                           tokens: list[str], score: float) -> list[WordBox]:
-    """Divide a caixa de uma linha em caixas de palavra."""
-    if len(tokens) == 1:
-        return [WordBox(x, y, w, h, tokens[0], score)]
+def _run_pass(img: np.ndarray, scale: float = 1.0) -> list[WordBox]:
+    """Roda uma passada de OCR e devolve caixas por palavra na escala
+    original."""
+    result = _get_engine()(img, return_word_box=True)
+    words: list[WordBox] = []
+    if result is None or not getattr(result, "word_results", None):
+        return words
+    for line in result.word_results:
+        for entry in line:
+            try:
+                text, score, pts = entry
+            except (ValueError, TypeError):
+                continue
+            text = (text or "").strip()
+            if not text or pts is None:
+                continue
+            arr = np.array(pts, dtype=np.float32) / scale
+            x, y = int(arr[:, 0].min()), int(arr[:, 1].min())
+            w = int(arr[:, 0].max() - x)
+            h = int(arr[:, 1].max() - y)
+            if w < 3 or h < 3:
+                continue
+            words.append(WordBox(x, y, w, h, text, float(score or 0.0)))
+    return words
 
-    crop = img[y:y + h, x:x + w]
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    try:
-        binary = binarize(gray)
-    except cv2.error:
-        binary = None
 
-    gaps: list[tuple[int, int]] = []
-    if binary is not None:
-        ink_per_col = (binary < 128).sum(axis=0)
-        in_gap = False
-        start = 0
-        for col, ink in enumerate(ink_per_col):
-            if ink == 0 and not in_gap:
-                in_gap, start = True, col
-            elif ink > 0 and in_gap:
-                in_gap = False
-                gaps.append((start, col))
-        # Espaço entre palavras ≈ vão largo (≥ 25% da altura da linha).
-        min_gap = max(3, int(h * 0.25))
-        gaps = [(a, b) for a, b in gaps
-                if (b - a) >= min_gap and a > 0 and b < w]
-        gaps.sort(key=lambda g: g[1] - g[0], reverse=True)
-        gaps = sorted(gaps[:len(tokens) - 1])
+def _iou(a: WordBox, b: WordBox) -> float:
+    x0 = max(a.x, b.x)
+    y0 = max(a.y, b.y)
+    x1 = min(a.x + a.w, b.x + b.w)
+    y1 = min(a.y + a.h, b.y + b.h)
+    inter = max(0, x1 - x0) * max(0, y1 - y0)
+    union = a.w * a.h + b.w * b.h - inter
+    return inter / union if union else 0.0
 
-    if len(gaps) == len(tokens) - 1:
-        cuts = [0] + [(a + b) // 2 for a, b in gaps] + [w]
-    else:
-        # Fallback: divide proporcionalmente ao nº de caracteres por token.
-        lens = [len(t) for t in tokens]
-        total = sum(lens) + len(tokens) - 1
-        cuts = [0]
-        acc = 0
-        for ln in lens[:-1]:
-            acc += ln + 1
-            cuts.append(int(w * acc / total))
-        cuts.append(w)
 
-    boxes = []
-    for i, token in enumerate(tokens):
-        wx0, wx1 = cuts[i], cuts[i + 1]
-        boxes.append(WordBox(x + wx0, y, max(1, wx1 - wx0), h, token, score))
-    return boxes
+def _merge(all_words: list[list[WordBox]]) -> list[WordBox]:
+    """Funde passadas: caixas sobrepostas viram uma só, vence a de maior
+    confiança."""
+    merged: list[WordBox] = []
+    for words in all_words:
+        for wb in words:
+            dup = next((m for m in merged if _iou(m, wb) > 0.5), None)
+            if dup is None:
+                merged.append(wb)
+            elif wb.score > dup.score:
+                merged[merged.index(dup)] = wb
+    merged.sort(key=lambda w: (w.y // 20, w.x))
+    return merged
+
+
+def _enhanced(img: np.ndarray) -> tuple[np.ndarray, float]:
+    """Versão 2x ampliada com contraste equalizado (CLAHE)."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    scale = 2.0 if max(img.shape[:2]) < 1400 else 1.0
+    if scale != 1.0:
+        gray = cv2.resize(gray, None, fx=scale, fy=scale,
+                          interpolation=cv2.INTER_CUBIC)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    out = clahe.apply(gray)
+    return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR), scale
+
+
+def _binarized(img: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    binary = binarize(gray)
+    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
 
 def _detect_rapidocr(img: np.ndarray) -> list[WordBox]:
-    result, _ = _get_rapidocr()(img)
-    words: list[WordBox] = []
-    for box, text, score in (result or []):
-        text = text.strip()
-        if not text:
-            continue
-        pts = np.array(box, dtype=np.float32)
-        x, y = int(pts[:, 0].min()), int(pts[:, 1].min())
-        w = int(pts[:, 0].max() - x)
-        h = int(pts[:, 1].max() - y)
-        if w < 4 or h < 4:
-            continue
-        words.extend(_split_line_into_words(img, x, y, w, h,
-                                            text.split(), float(score)))
-    return words
+    passes = [_run_pass(img)]
+    # Passadas extras só ajudam quando a primeira veio fraca — evita custo
+    # desnecessário em imagens limpas.
+    weak = (not passes[0]
+            or min((w.score for w in passes[0]), default=0.0) < 0.92)
+    if weak:
+        enhanced, scale = _enhanced(img)
+        passes.append(_run_pass(enhanced, scale))
+        try:
+            passes.append(_run_pass(_binarized(img)))
+        except cv2.error:
+            pass
+    return _merge(passes)
 
 
 def _detect_tesseract(img: np.ndarray) -> list[WordBox]:

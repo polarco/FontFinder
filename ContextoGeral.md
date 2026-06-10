@@ -56,7 +56,8 @@ run.sh                    launcher
 ## Dívidas técnicas
 - Score conservador (~55% para match exato) — considerar recalibração da escala exibida.
 - Split de linha em palavras pode gerar caixas duplicadas/sobrepostas em casos raros (visto com "é" no e2e).
-- Descoberta de fontes em Windows/macOS implementada mas não testada (só Linux/fontconfig validado).
+- Descoberta de fontes em Windows validada via CI (testes do pipeline passam no runner windows-latest); macOS implementado mas não testado.
+- .exe não é assinado — SmartScreen avisa na primeira execução.
 
 ## Pontos de atenção
 - Fontes decorativas/manuscritas degradam OCR — por isso a edição manual da palavra é essencial (o matching usa o texto digitado, nunca o OCR cru).
@@ -70,9 +71,10 @@ run.sh                    launcher
 ## Histórico
 - 2026-06-10 — Sessão inicial: escopo definido, prompt de criação gerado (Claude).
 - 2026-06-10 — MVP v0.1.0 implementado e testado (7 testes + e2e + smoke da GUI; fonte original no top 1 do ranking no e2e) (Claude).
+- 2026-06-10 — v0.2.0: repositório público em github.com/polarco/FontFinder; GitHub Actions compila FontFinder.exe (Windows, PyInstaller onefile, 164 MB) e anexa nas releases de tag v*; testes passam também no Windows (Claude).
 
 ## Próximos passos
-- Filipe testar a UI com imagens reais (`./run.sh`).
+- Filipe testar o FontFinder.exe no PC Windows (download na release v0.2.0).
 - Calibrar pesos do score fino com casos reais difíceis.
 
 ## Backlog

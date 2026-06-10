@@ -86,9 +86,9 @@ comparações repetidas da mesma palavra são quase instantâneas.
 
 ## Limitações conhecidas
 
-- O score é conservador: um match exato fica na faixa de ~55%, não 100%.
-  O que importa é a **ordem** do ranking.
+- Fontes script/caligráficas extremas (ex.: Z003/Chancery) ainda podem ficar
+  fora do top 20 quando a imagem é muito degradada.
 - Fontes que não têm os glifos da palavra (ex.: símbolos, ícones) são puladas
   automaticamente.
-- O OCR pode errar acentos em fontes decorativas — por isso o campo de texto
-  é editável.
+- O OCR pode errar em fontes decorativas — por isso o campo de texto é
+  editável (o matching usa o que você digitar).

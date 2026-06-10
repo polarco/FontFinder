@@ -27,9 +27,8 @@ class _ResultRow(QWidget):
         score_label = QLabel(f"{result.score:.0f}%")
         score_label.setFixedWidth(48)
         score_label.setAlignment(Qt.AlignCenter)
-        # A métrica é conservadora: um match exato fica na faixa de ~55%.
-        color = ("#2ecc71" if result.score >= 52
-                 else "#f1c40f" if result.score >= 44 else "#8b919c")
+        color = ("#2ecc71" if result.score >= 85
+                 else "#f1c40f" if result.score >= 60 else "#8b919c")
         score_label.setStyleSheet(
             f"font-size: 15px; font-weight: 700; color: {color};")
 

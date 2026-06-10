@@ -73,8 +73,48 @@ def to_canvas(binary: np.ndarray, canvas: tuple[int, int] = FINE_CANVAS) -> np.n
     return out
 
 
+def _align_horizontal(canvas_a: np.ndarray, canvas_b: np.ndarray,
+                      max_shift: int = 24) -> np.ndarray:
+    """Desloca `canvas_b` horizontalmente para casar com `canvas_a`
+    (correlação dos perfis de tinta por coluna)."""
+    prof_a = (canvas_a < 128).sum(axis=0).astype(np.float32)
+    prof_b = (canvas_b < 128).sum(axis=0).astype(np.float32)
+    best_shift, best_err = 0, np.inf
+    for shift in range(-max_shift, max_shift + 1):
+        rolled = np.roll(prof_b, shift)
+        err = float(np.mean(np.abs(prof_a - rolled)))
+        if err < best_err:
+            best_err, best_shift = err, shift
+    if best_shift == 0:
+        return canvas_b
+    out = np.roll(canvas_b, best_shift, axis=1)
+    if best_shift > 0:
+        out[:, :best_shift] = 255
+    else:
+        out[:, best_shift:] = 255
+    return out
+
+
+def _chamfer_similarity(canvas_a: np.ndarray, canvas_b: np.ndarray) -> float:
+    """Similaridade por distância de chamfer simétrica: quão perto cada pixel
+    de tinta de um está da tinta do outro. Tolerante a deformações pequenas —
+    bom para fontes decorativas/irregulares."""
+    ink_a = canvas_a < 128
+    ink_b = canvas_b < 128
+    if not ink_a.any() or not ink_b.any():
+        return 0.0
+    # distância de cada pixel até a tinta mais próxima
+    dist_to_a = cv2.distanceTransform((~ink_a).astype(np.uint8), cv2.DIST_L2, 3)
+    dist_to_b = cv2.distanceTransform((~ink_b).astype(np.uint8), cv2.DIST_L2, 3)
+    d_ab = float(dist_to_b[ink_a].mean())
+    d_ba = float(dist_to_a[ink_b].mean())
+    # escala: ~4px de desvio médio ainda é "parecido" num canvas de 96px de altura
+    return float(np.exp(-(d_ab + d_ba) / 8.0))
+
+
 def fine_similarity(canvas_a: np.ndarray, canvas_b: np.ndarray) -> float:
     """Similaridade 0..1 entre dois canvases (mesma forma)."""
+    canvas_b = _align_horizontal(canvas_a, canvas_b)
     # Borrão leve dá tolerância a pequenos desalinhamentos.
     a = cv2.GaussianBlur(canvas_a, (5, 5), 0).astype(np.float32)
     b = cv2.GaussianBlur(canvas_b, (5, 5), 0).astype(np.float32)
@@ -98,5 +138,8 @@ def fine_similarity(canvas_a: np.ndarray, canvas_b: np.ndarray) -> float:
     union = np.logical_or(ink_a, ink_b).sum()
     iou = float(np.logical_and(ink_a, ink_b).sum() / union) if union else 0.0
 
-    score = 0.40 * max(0.0, ssim) + 0.35 * max(0.0, hog_cos) + 0.25 * iou
+    chamfer = _chamfer_similarity(canvas_a, canvas_b)
+
+    score = (0.30 * max(0.0, ssim) + 0.25 * max(0.0, hog_cos)
+             + 0.20 * iou + 0.25 * chamfer)
     return float(np.clip(score, 0.0, 1.0))

@@ -2,10 +2,9 @@
 # Build: pyinstaller FontFinder.spec
 from PyInstaller.utils.hooks import collect_all
 
-# RapidOCR carrega modelos .onnx e config.yaml de dentro do pacote — precisam
-# ser embutidos no executável.
-rapidocr_datas, rapidocr_binaries, rapidocr_hidden = collect_all(
-    "rapidocr_onnxruntime")
+# RapidOCR carrega modelos .onnx e configs .yaml de dentro do pacote — o CI
+# pré-baixa os modelos (latino PP-OCRv5) antes do build para serem embutidos.
+rapidocr_datas, rapidocr_binaries, rapidocr_hidden = collect_all("rapidocr")
 
 a = Analysis(
     ["fontfinder/main.py"],

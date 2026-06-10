@@ -25,6 +25,9 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Pré-baixar modelos de OCR (ficam embutidos no exe)
+        run: python -c "from fontfinder.ocr.engine import _get_engine; _get_engine()"
+
       - name: Rodar testes (sem GUI)
         run: python -m pytest tests/ -q
 
