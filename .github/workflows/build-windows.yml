@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write  # necessário para criar a release e anexar o .exe
+
 jobs:
   build:
     runs-on: windows-latest
