@@ -23,7 +23,7 @@ jobs:
           pip install pyinstaller
 
       - name: Rodar testes (sem GUI)
-        run: pytest tests/ -q
+        run: python -m pytest tests/ -q
 
       - name: Compilar FontFinder.exe
         run: pyinstaller FontFinder.spec
